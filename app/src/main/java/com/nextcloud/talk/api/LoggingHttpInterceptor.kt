@@ -11,7 +11,8 @@ import com.nextcloud.talk.logger.Logger
 import com.nextcloud.talk.logger.LogsRepository
 import okhttp3.Interceptor
 import okhttp3.Response
-import okhttp3.logging.HttpLoggingInterceptor
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 class LoggingHttpInterceptor @Inject constructor(
@@ -23,20 +24,16 @@ class LoggingHttpInterceptor @Inject constructor(
         if (logsRepository.minimumLevel > Level.DEBUG) {
             return chain.proceed(chain.request())
         }
-        // A local StringBuilder is safe here because HttpLoggingInterceptor calls
-        // the lambda synchronously and sequentially within this single intercept() call.
-        val sb = StringBuilder()
-        return HttpLoggingInterceptor { line ->
-            if (sb.isNotEmpty()) sb.append('\n')
-            sb.append(line)
-            if (line.startsWith("<-- END HTTP") || line.startsWith("<-- HTTP FAILED")) {
-                logger.d("HTTP", sb.toString())
-                sb.clear()
+        // URLs, headers, bodies and exception messages may contain credentials or private conversation data.
+        val started = System.nanoTime()
+        return try {
+            chain.proceed(chain.request()).also { response ->
+                val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+                logger.d("HTTP", "Response ${response.code} received in ${elapsedMs}ms")
             }
-        }.apply {
-            level = HttpLoggingInterceptor.Level.BODY
-            redactHeader("Authorization")
-            redactHeader("Proxy-Authorization")
-        }.intercept(chain)
+        } catch (exception: IOException) {
+            logger.d("HTTP", "Request failed (${exception.javaClass.simpleName})")
+            throw exception
+        }
     }
 }

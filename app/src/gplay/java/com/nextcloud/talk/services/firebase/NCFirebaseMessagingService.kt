@@ -62,7 +62,7 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        Log.d(TAG, "onNewToken. token = $token")
+        Log.d(TAG, "Firebase push token refreshed")
 
         appPreferences.pushToken = token
         appPreferences.pushTokenLatestGeneration = System.currentTimeMillis()

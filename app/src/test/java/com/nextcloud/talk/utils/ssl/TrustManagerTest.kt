@@ -14,6 +14,7 @@ import okhttp3.tls.HeldCertificate
 import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -23,6 +24,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
 import java.security.cert.X509Certificate
+import java.security.cert.CertificateException
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.SSLPeerUnverifiedException
 import javax.net.ssl.SSLSession
@@ -37,9 +45,14 @@ import javax.net.ssl.SSLSession
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [33])
+@Suppress("TooManyFunctions")
 class TrustManagerTest {
 
     private lateinit var trustManager: TrustManager
+    private val handshakeThread = AtomicReference<Thread>()
+    private val executor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "certificate-test").also { handshakeThread.set(it) }
+    }
 
     @Before
     fun setUp() {
@@ -59,6 +72,8 @@ class TrustManagerTest {
 
     @After
     fun tearDown() {
+        executor.shutdownNow()
+        assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS))
         setSharedApplication(null)
     }
 
@@ -134,6 +149,74 @@ class TrustManagerTest {
         val hostnameVerifier = trustManager.getHostnameVerifier(defaultVerifier)
 
         assertFalse(hostnameVerifier.verify("example.com", sslSession))
+    }
+
+    @Test
+    fun `untrusted handshake waits without spinning and resumes after approval`() {
+        val certificate = selfSignedCertificate("pending.example", withSan = true)
+        val result = checkCertificateAsync(certificate)
+        awaitWaitingHandshake()
+
+        trustManager.addCertInTrustStore(certificate)
+
+        assertTrue(result.get(2, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun `approving another certificate does not authorize the waiting handshake`() {
+        val certificate = selfSignedCertificate("pending.example", withSan = true)
+        val result = checkCertificateAsync(certificate)
+        awaitWaitingHandshake()
+
+        trustManager.addCertInTrustStore(selfSignedCertificate("other.example", withSan = true))
+
+        assertThrows(TimeoutException::class.java) { result.get(100, TimeUnit.MILLISECONDS) }
+        trustManager.addCertInTrustStore(certificate)
+        assertTrue(result.get(2, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun `interrupted handshake fails closed and preserves interrupt status`() {
+        val interrupted = AtomicBoolean()
+        val result = checkCertificateAsync(selfSignedCertificate("pending.example", withSan = true), interrupted)
+        awaitWaitingHandshake()
+
+        handshakeThread.get().interrupt()
+
+        assertFalse(result.get(2, TimeUnit.SECONDS))
+        assertTrue(interrupted.get())
+    }
+
+    @Test(timeout = 20000)
+    fun `unapproved certificate is rejected after the decision timeout`() {
+        val result = checkCertificateAsync(selfSignedCertificate("pending.example", withSan = true))
+        awaitWaitingHandshake()
+
+        assertFalse(result.get(18, TimeUnit.SECONDS))
+    }
+
+    private fun checkCertificateAsync(
+        certificate: X509Certificate,
+        interrupted: AtomicBoolean = AtomicBoolean()
+    ): Future<Boolean> =
+        executor.submit<Boolean> {
+            try {
+                trustManager.checkServerTrusted(arrayOf(certificate), "RSA")
+                true
+            } catch (_: CertificateException) {
+                false
+            } finally {
+                interrupted.set(Thread.currentThread().isInterrupted)
+            }
+        }
+
+    private fun awaitWaitingHandshake() {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (System.nanoTime() < deadline) {
+            if (handshakeThread.get()?.state == Thread.State.TIMED_WAITING) return
+            Thread.sleep(1)
+        }
+        assertTrue("TLS handshake should park while awaiting approval", false)
     }
 
     private fun selfSignedCertificate(host: String, withSan: Boolean): X509Certificate {

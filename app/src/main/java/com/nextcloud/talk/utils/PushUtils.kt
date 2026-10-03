@@ -192,7 +192,7 @@ class PushUtils {
         val pushToken = appPreferences.pushToken
 
         if (pushToken.isNotEmpty()) {
-            Log.d(TAG, "pushRegistrationToServer will be done with pushToken: $pushToken")
+            Log.d(TAG, "Registering push token with server")
             val pushTokenHash = generateSHA512Hash(pushToken).lowercase(Locale.getDefault())
             val devicePublicKey = readKeyFromFile(true) as PublicKey?
             if (devicePublicKey != null) {

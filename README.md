@@ -47,6 +47,10 @@ If you have suggestions or problems, please [open an issue](https://github.com/n
 
 ## How to contribute :rocket:
 
+For the `dauge-gpt` fork: [audit and remaining risks](docs/fork/AUDIT_RU.md),
+[build, sign and distribute APKs](docs/fork/BUILD_AND_DEPLOY_RU.md),
+[upstream contribution workflow](docs/fork/UPSTREAM_RU.md).
+
 If you want to [contribute](https://nextcloud.com/contribute/) to Nextcloud, you are very welcome: 
 
 - on [our public Talk team conversation](https://cloud.nextcloud.com/call/c7fz9qpr)

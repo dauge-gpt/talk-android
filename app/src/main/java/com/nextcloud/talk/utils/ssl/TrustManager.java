@@ -25,6 +25,7 @@ import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLSession;
@@ -34,8 +35,10 @@ import javax.net.ssl.X509TrustManager;
 
 public class TrustManager implements X509TrustManager {
     private static final String TAG = "TrustManager";
+    private static final long CERTIFICATE_DECISION_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(15);
 
     private final File keystoreFile;
+    private final Object trustStoreLock = new Object();
     private X509TrustManager systemTrustManager = null;
     private KeyStore trustedKeyStore = null;
 
@@ -97,12 +100,7 @@ public class TrustManager implements X509TrustManager {
                 if (!isCertInTrustStore(x509Certificate)) {
                     EventBus.getDefault().post(new CertificateEvent(x509Certificate, this,
                                                                     null));
-                    long startTime = System.currentTimeMillis();
-                    while (!isCertInTrustStore(x509Certificate) && System.currentTimeMillis() <=
-                        startTime + 15000) {
-                        //do nothing
-                    }
-                    return isCertInTrustStore(x509Certificate);
+                    return awaitCertificateDecision(x509Certificate);
                 } else {
                     return true;
                 }
@@ -112,27 +110,50 @@ public class TrustManager implements X509TrustManager {
         return false;
     }
 
-    private boolean isCertInTrustStore(X509Certificate x509Certificate) {
-        if (trustedKeyStore != null) {
-            try {
-                if (trustedKeyStore.getCertificateAlias(x509Certificate) != null) {
-                    return true;
+    private boolean awaitCertificateDecision(X509Certificate certificate) {
+        long deadline = System.nanoTime() + CERTIFICATE_DECISION_TIMEOUT_NANOS;
+        synchronized (trustStoreLock) {
+            while (!isCertInTrustStore(certificate)) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) {
+                    return false;
                 }
-            } catch (KeyStoreException exception) {
-                return false;
+                try {
+                    // Recheck the certificate after every wakeup: another certificate may have been accepted.
+                    TimeUnit.NANOSECONDS.timedWait(trustStoreLock, remaining);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
             }
+            return true;
         }
+    }
 
-        return false;
+    private boolean isCertInTrustStore(X509Certificate x509Certificate) {
+        synchronized (trustStoreLock) {
+            if (trustedKeyStore != null) {
+                try {
+                    return trustedKeyStore.getCertificateAlias(x509Certificate) != null;
+                } catch (KeyStoreException exception) {
+                    return false;
+                }
+            }
+            return false;
+        }
     }
 
     public void addCertInTrustStore(X509Certificate x509Certificate) {
-        if (trustedKeyStore != null) {
-            try (FileOutputStream fileOutputStream = new FileOutputStream(keystoreFile)) {
-                trustedKeyStore.setCertificateEntry(x509Certificate.getSubjectDN().getName(), x509Certificate);
-                trustedKeyStore.store(fileOutputStream, null);
-            } catch (Exception exception) {
-                Log.d(TAG, "Failed to set certificate entry " + exception.getLocalizedMessage());
+        synchronized (trustStoreLock) {
+            if (trustedKeyStore != null) {
+                try (FileOutputStream fileOutputStream = new FileOutputStream(keystoreFile)) {
+                    trustedKeyStore.setCertificateEntry(x509Certificate.getSubjectDN().getName(), x509Certificate);
+                    trustedKeyStore.store(fileOutputStream, null);
+                } catch (Exception exception) {
+                    Log.d(TAG, "Failed to set certificate entry " + exception.getLocalizedMessage());
+                } finally {
+                    trustStoreLock.notifyAll();
+                }
             }
         }
     }
