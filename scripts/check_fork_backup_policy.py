@@ -45,6 +45,13 @@ def main() -> None:
     for key, value in expected.items():
         if application.get(ANDROID + key) != value:
             raise ValueError(f"Manifest: {key} must be {value}")
+    for manifest in (ROOT / "app/src").glob("*/AndroidManifest.xml"):
+        overlay = ET.parse(manifest).getroot().find("application")
+        if overlay is not None:
+            for key, value in expected.items():
+                override = overlay.get(ANDROID + key)
+                if override is not None and override != value:
+                    raise ValueError(f"{manifest}: {key} overrides the backup policy")
     if application.get(ANDROID + "backupAgent"):
         raise ValueError("Custom BackupAgent requires a separate policy review")
 
