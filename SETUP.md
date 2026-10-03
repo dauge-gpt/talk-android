@@ -4,6 +4,9 @@
 -->
 # [Nextcloud](https://nextcloud.com) Talk for Android Setup Guide
 
+For the current `dauge-gpt` fork, use [the current build and APK signing guide](docs/fork/BUILD_AND_DEPLOY_RU.md).
+The legacy SDK versions listed below do not match the current Gradle configuration.
+
 # Index
 1. [Setup Guide](#setup-guide)
     1. [Tooling setup](#tooling-setup)
